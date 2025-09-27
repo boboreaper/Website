@@ -202,10 +202,12 @@ class LearningNotebook {
         const buttons = this.radialMenu.querySelectorAll('.radial-button');
         buttons.forEach((btn) => {
             const angle = parseInt(btn.dataset.angle);
-            const radius = 80;
+            const radius = 70; // Distance from center
             const radian = (angle * Math.PI) / 180;
-            const x = Math.cos(radian) * radius + 96; // 96 = half of menu width
-            const y = Math.sin(radian) * radius + 96;
+            
+            // Calculate position relative to FAB center (28px from menu origin)
+            const x = Math.cos(radian) * radius + 100; // 100 = half of menu width
+            const y = Math.sin(radian) * radius + 100; // 100 = half of menu height
             
             btn.style.left = x + 'px';
             btn.style.top = y + 'px';
@@ -217,6 +219,9 @@ class LearningNotebook {
                 console.log('Radial button clicked:', mode);
                 if (mode === 'image') {
                     this.fileInput.click();
+                    this.closeMenu();
+                } else if (mode === 'save') {
+                    this.saveToGitHub();
                     this.closeMenu();
                 } else if (mode) {
                     this.setMode(mode);
@@ -603,13 +608,13 @@ class LearningNotebook {
                 
                 <!-- Radial menu buttons -->
                 <div id="radial-menu" class="radial-menu hidden">
-                    <button class="radial-button" data-mode="draw" data-angle="-90" title="Rajzolás">
+                    <button class="radial-button" data-mode="draw" data-angle="180" title="Rajzolás">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
                         </svg>
                     </button>
                     
-                    <button class="radial-button" data-mode="text" data-angle="-45" title="Szöveg">
+                    <button class="radial-button" data-mode="text" data-angle="135" title="Szöveg">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="4 7 4 4 20 4 20 7"/>
                             <line x1="9" y1="20" x2="15" y2="20"/>
@@ -617,7 +622,7 @@ class LearningNotebook {
                         </svg>
                     </button>
                     
-                    <button class="radial-button" data-mode="link" data-angle="0" title="Hivatkozás">
+                    <button class="radial-button" data-mode="link" data-angle="90" title="Hivatkozás">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
                             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
@@ -632,11 +637,20 @@ class LearningNotebook {
                         </svg>
                     </button>
                     
-                    <button class="radial-button" data-mode="erase" data-angle="90" title="Radír">
+                    <button class="radial-button" data-mode="erase" data-angle="0" title="Radír">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M7 21h10"/>
                             <path d="M19 21v-8a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v8"/>
                             <path d="M7 10V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4"/>
+                        </svg>
+                    </button>
+                    
+                    <!-- Save button -->
+                    <button class="radial-button save-button" data-mode="save" data-angle="225" title="Mentés GitHub-ra">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                            <polyline points="17,21 17,13 7,13 7,21"/>
+                            <polyline points="7,3 7,8 15,8"/>
                         </svg>
                     </button>
                 </div>
@@ -867,7 +881,148 @@ class LearningNotebook {
         this.selectBox(id);
     }
     
-    render() {
+    async saveToGitHub() {
+        try {
+            // Get GitHub token from user
+            const token = prompt('GitHub Personal Access Token (needed to save):');
+            if (!token) return;
+            
+            const repo = prompt('Repository name (e.g., "username/my-notebook"):');
+            if (!repo) return;
+            
+            const filename = prompt('File name (e.g., "my-drawing.json"):', 'notebook-' + new Date().toISOString().slice(0,10) + '.json');
+            if (!filename) return;
+            
+            // Prepare data to save
+            const saveData = {
+                timestamp: new Date().toISOString(),
+                strokes: this.strokes,
+                boxes: this.boxes,
+                settings: {
+                    brushSize: this.brushSize,
+                    brushColor: this.brushColor,
+                    brushStyle: this.brushStyle
+                }
+            };
+            
+            // Convert canvas to base64 image for preview
+            const canvasDataURL = this.canvas.toDataURL('image/png');
+            saveData.preview = canvasDataURL;
+            
+            const content = JSON.stringify(saveData, null, 2);
+            const encodedContent = btoa(unescape(encodeURIComponent(content)));
+            
+            // GitHub API request
+            const response = await fetch(`https://api.github.com/repos/${repo}/contents/${filename}`, {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `token ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    message: `Save notebook: ${filename}`,
+                    content: encodedContent,
+                    branch: 'main'
+                })
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                alert(`✅ Successfully saved to GitHub!\n\nFile: ${filename}\nURL: ${result.content.html_url}`);
+                
+                // Show success notification
+                this.showNotification('✅ Saved to GitHub!', 'success');
+            } else {
+                const error = await response.json();
+                console.error('GitHub API Error:', error);
+                alert(`❌ Error saving to GitHub: ${error.message}`);
+                this.showNotification('❌ Save failed', 'error');
+            }
+            
+        } catch (error) {
+            console.error('Save error:', error);
+            alert(`❌ Error: ${error.message}`);
+            this.showNotification('❌ Save failed', 'error');
+        }
+    }
+    
+    async loadFromGitHub() {
+        try {
+            const repo = prompt('Repository name (e.g., "username/my-notebook"):');
+            if (!repo) return;
+            
+            const filename = prompt('File name to load:');
+            if (!filename) return;
+            
+            const response = await fetch(`https://api.github.com/repos/${repo}/contents/${filename}`);
+            
+            if (response.ok) {
+                const result = await response.json();
+                const content = atob(result.content);
+                const saveData = JSON.parse(content);
+                
+                // Load data
+                this.strokes = saveData.strokes || [];
+                this.boxes = saveData.boxes || [];
+                if (saveData.settings) {
+                    this.brushSize = saveData.settings.brushSize || 3;
+                    this.brushColor = saveData.settings.brushColor || '#ffffff';
+                    this.brushStyle = saveData.settings.brushStyle || 'round';
+                }
+                
+                // Refresh display
+                this.redrawCanvas();
+                this.render();
+                
+                this.showNotification('✅ Loaded from GitHub!', 'success');
+                alert(`✅ Successfully loaded: ${filename}`);
+            } else {
+                alert('❌ File not found or access denied');
+                this.showNotification('❌ Load failed', 'error');
+            }
+            
+        } catch (error) {
+            console.error('Load error:', error);
+            alert(`❌ Error: ${error.message}`);
+            this.showNotification('❌ Load failed', 'error');
+        }
+    }
+    
+    showNotification(message, type = 'info') {
+        // Create notification element
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 100px;
+            right: 20px;
+            background: ${type === 'success' ? 'rgba(34, 197, 94, 0.9)' : type === 'error' ? 'rgba(239, 68, 68, 0.9)' : 'rgba(59, 130, 246, 0.9)'};
+            color: white;
+            padding: 12px 20px;
+            border-radius: 12px;
+            font-weight: 500;
+            z-index: 1000;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+        `;
+        notification.textContent = message;
+        
+        document.body.appendChild(notification);
+        
+        // Animate in
+        setTimeout(() => {
+            notification.style.transform = 'translateX(0)';
+        }, 100);
+        
+        // Remove after 3 seconds
+        setTimeout(() => {
+            notification.style.transform = 'translateX(400px)';
+            setTimeout(() => {
+                document.body.removeChild(notification);
+            }, 300);
+        }, 3000);
+    }
         // Clear existing boxes
         this.boxesContainer.innerHTML = '';
         
