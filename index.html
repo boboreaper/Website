@@ -603,13 +603,13 @@ class LearningNotebook {
                 
                 <!-- Radial menu buttons -->
                 <div id="radial-menu" class="radial-menu hidden">
-                    <button class="radial-button" data-mode="draw" data-angle="180" title="Rajzolás">
+                    <button class="radial-button" data-mode="draw" data-angle="-90" title="Rajzolás">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
                         </svg>
                     </button>
                     
-                    <button class="radial-button" data-mode="text" data-angle="135" title="Szöveg">
+                    <button class="radial-button" data-mode="text" data-angle="-45" title="Szöveg">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="4 7 4 4 20 4 20 7"/>
                             <line x1="9" y1="20" x2="15" y2="20"/>
@@ -617,7 +617,7 @@ class LearningNotebook {
                         </svg>
                     </button>
                     
-                    <button class="radial-button" data-mode="link" data-angle="90" title="Hivatkozás">
+                    <button class="radial-button" data-mode="link" data-angle="0" title="Hivatkozás">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
                             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
@@ -632,20 +632,11 @@ class LearningNotebook {
                         </svg>
                     </button>
                     
-                    <button class="radial-button" data-mode="erase" data-angle="0" title="Radír">
+                    <button class="radial-button" data-mode="erase" data-angle="90" title="Radír">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M7 21h10"/>
                             <path d="M19 21v-8a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v8"/>
                             <path d="M7 10V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4"/>
-                        </svg>
-                    </button>
-                    
-                    <!-- Save button -->
-                    <button class="radial-button save-button" data-mode="save" data-angle="225" title="Mentés GitHub-ra">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                            <polyline points="17,21 17,13 7,13 7,21"/>
-                            <polyline points="7,3 7,8 15,8"/>
                         </svg>
                     </button>
                 </div>
