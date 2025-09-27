@@ -165,12 +165,25 @@ class LearningNotebook {
         
         // Container clicks for placing text/links
         this.container.addEventListener('pointerdown', (e) => {
-            if (e.target.closest('.menu-ignore') || e.target.closest('.fab-container')) return;
+            // Ignore clicks on UI elements
+            if (e.target.closest('.settings-panel') || 
+                e.target.closest('.fab-container') || 
+                e.target.closest('.radial-menu') ||
+                e.target.closest('.notebook-box') ||
+                e.target.closest('.helper-tooltip')) {
+                return;
+            }
             
             const pos = this.getPointerPos(e);
+            console.log('Container clicked, mode:', this.mode, 'pos:', pos);
+            
             if (this.mode === 'text') {
+                e.preventDefault();
+                e.stopPropagation();
                 this.addTextAt(pos);
             } else if (this.mode === 'link') {
+                e.preventDefault(); 
+                e.stopPropagation();
                 this.addLinkAt(pos);
             }
         });
@@ -195,22 +208,39 @@ class LearningNotebook {
                 this.closeSettings();
                 this.setMode('none');
             }
+            // Ctrl+S to save
+            if (e.ctrlKey && e.key === 's') {
+                e.preventDefault();
+                this.saveToGitHub();
+            }
+            // Ctrl+O to load  
+            if (e.ctrlKey && e.key === 'o') {
+                e.preventDefault();
+                this.loadFromGitHub();
+            }
         });
     }
     
     setupRadialMenu() {
         const buttons = this.radialMenu.querySelectorAll('.radial-button');
-        buttons.forEach((btn) => {
+        buttons.forEach((btn, index) => {
             const angle = parseInt(btn.dataset.angle);
-            const radius = 70; // Distance from center
+            const radius = 80; // Distance from FAB center
             const radian = (angle * Math.PI) / 180;
             
-            // Calculate position relative to FAB center (28px from menu origin)
-            const x = Math.cos(radian) * radius + 100; // 100 = half of menu width
-            const y = Math.sin(radian) * radius + 100; // 100 = half of menu height
+            // Calculate position - buttons should be positioned relative to the FAB center
+            // FAB is at (28, 28) within the menu container, so we offset from there
+            const centerX = 28; // FAB center X in menu container
+            const centerY = 28; // FAB center Y in menu container
+            
+            const x = centerX + Math.cos(radian) * radius;
+            const y = centerY + Math.sin(radian) * radius;
+            
+            console.log(`Button ${index} (${angle}°): x=${x}, y=${y}`);
             
             btn.style.left = x + 'px';
             btn.style.top = y + 'px';
+            btn.style.transform = 'translate(-50%, -50%)';
             
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -772,6 +802,7 @@ class LearningNotebook {
     }
     
     addTextAt(pos) {
+        console.log('Adding text at:', pos);
         const snapped = this.snapToGrid(pos.x, pos.y);
         const id = Date.now() + Math.random();
         const box = {
@@ -791,8 +822,9 @@ class LearningNotebook {
         
         this.boxes.push(box);
         this.selectedBox = id;
-        this.setMode('none');
+        this.mode = 'none'; // Reset mode but keep settings open
         this.render();
+        console.log('Text box added:', box);
     }
     
     addLinkAt(pos) {
