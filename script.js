@@ -1,0 +1,857 @@
+class LearningNotebook {
+    constructor() {
+        this.container = document.getElementById('container');
+        this.canvas = document.getElementById('canvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.boxesContainer = document.getElementById('boxes-container');
+        this.settingsPanel = document.getElementById('settings-panel');
+        this.fabButton = document.getElementById('fab-button');
+        this.radialMenu = document.getElementById('radial-menu');
+        this.fileInput = document.getElementById('file-input');
+        
+        // State
+        this.menuOpen = false;
+        this.mode = 'none'; // none | draw | text | link | erase
+        this.settingsVisible = false;
+        this.strokes = [];
+        this.currentStroke = null;
+        this.drawing = false;
+        this.brushSize = 3;
+        this.brushColor = '#ffffff';
+        this.brushStyle = 'round';
+        this.boxes = [];
+        this.selectedBox = null;
+        this.lastPointer = { x: 200, y: 200 };
+        this.dragState = {};
+        this.GRID = 32;
+        
+        this.init();
+    }
+    
+    init() {
+        this.setupCanvas();
+        this.bindEvents();
+        this.setupRadialMenu();
+        this.render();
+    }
+    
+    setupCanvas() {
+        const resizeCanvas = () => {
+            const rect = this.canvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            this.canvas.width = rect.width * dpr;
+            this.canvas.height = rect.height * dpr;
+            this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            this.redrawCanvas();
+        };
+        
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+    }
+    
+    redrawCanvas() {
+        const rect = this.canvas.getBoundingClientRect();
+        this.ctx.clearRect(0, 0, rect.width, rect.height);
+        
+        // Draw strokes
+        for (const stroke of this.strokes) {
+            if (!stroke.points || stroke.points.length === 0) continue;
+            this.ctx.lineJoin = stroke.style || 'round';
+            this.ctx.lineCap = stroke.style || 'round';
+            this.ctx.strokeStyle = stroke.color;
+            this.ctx.lineWidth = stroke.size;
+            this.ctx.beginPath();
+            this.ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+            for (let i = 1; i < stroke.points.length; i++) {
+                this.ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+            }
+            this.ctx.stroke();
+        }
+        
+        // Draw current stroke
+        if (this.currentStroke && this.currentStroke.points.length > 0) {
+            this.ctx.lineJoin = this.currentStroke.style || 'round';
+            this.ctx.lineCap = this.currentStroke.style || 'round';
+            this.ctx.strokeStyle = this.currentStroke.color;
+            this.ctx.lineWidth = this.currentStroke.size;
+            this.ctx.beginPath();
+            this.ctx.moveTo(this.currentStroke.points[0].x, this.currentStroke.points[0].y);
+            for (let i = 1; i < this.currentStroke.points.length; i++) {
+                this.ctx.lineTo(this.currentStroke.points[i].x, this.currentStroke.points[i].y);
+            }
+            this.ctx.stroke();
+        }
+    }
+    
+    getPointerPos(e) {
+        const rect = this.container.getBoundingClientRect();
+        return {
+            x: Math.round(e.clientX - rect.left),
+            y: Math.round(e.clientY - rect.top)
+        };
+    }
+    
+    snapToGrid(x, y) {
+        return {
+            x: Math.round(x / this.GRID) * this.GRID,
+            y: Math.round(y / this.GRID) * this.GRID
+        };
+    }
+    
+    bindEvents() {
+        // FAB button
+        this.fabButton.addEventListener('click', () => {
+            this.toggleMenu();
+        });
+        
+        // Canvas events for drawing
+        this.canvas.addEventListener('pointerdown', (e) => {
+            const pos = this.getPointerPos(e);
+            if (this.mode === 'draw') {
+                this.drawing = true;
+                this.currentStroke = {
+                    color: this.brushColor,
+                    size: this.brushSize,
+                    style: this.brushStyle,
+                    points: [pos]
+                };
+            } else if (this.mode === 'erase') {
+                this.eraseAt(pos);
+            }
+        });
+        
+        window.addEventListener('pointermove', (e) => {
+            const pos = this.getPointerPos(e);
+            this.lastPointer = pos;
+            
+            if (this.mode === 'draw' && this.drawing && this.currentStroke) {
+                this.currentStroke.points.push(pos);
+                this.redrawCanvas();
+            } else if (this.mode === 'erase' && e.buttons === 1) {
+                this.eraseAt(pos);
+            }
+            
+            // Handle box dragging
+            if (this.dragState.dragging) {
+                const dx = pos.x - this.dragState.startX;
+                const dy = pos.y - this.dragState.startY;
+                const newX = Math.round((this.dragState.origX + dx) / this.GRID) * this.GRID;
+                const newY = Math.round((this.dragState.origY + dy) / this.GRID) * this.GRID;
+                this.updateBox(this.dragState.id, { x: newX, y: newY });
+            }
+        });
+        
+        window.addEventListener('pointerup', () => {
+            if (this.mode === 'draw' && this.drawing) {
+                this.drawing = false;
+                if (this.currentStroke) {
+                    this.strokes.push(this.currentStroke);
+                    this.currentStroke = null;
+                    this.redrawCanvas();
+                }
+            }
+            
+            if (this.dragState.dragging) {
+                this.dragState = {};
+            }
+        });
+        
+        // Container clicks for placing text/links
+        this.container.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('.menu-ignore')) return;
+            
+            const pos = this.getPointerPos(e);
+            if (this.mode === 'text') {
+                this.addTextAt(pos);
+            } else if (this.mode === 'link') {
+                this.addLinkAt(pos);
+            }
+        });
+        
+        // File input
+        this.fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                this.handleImageFile(file);
+                e.target.value = '';
+            }
+        });
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (this.selectedBox && !e.target.closest('.text-box-content')) {
+                    this.deleteSelectedBox();
+                }
+            }
+            if (e.key === 'Escape') {
+                this.closeSettings();
+                this.setMode('none');
+            }
+        });
+    }
+    
+    setupRadialMenu() {
+        const buttons = this.radialMenu.querySelectorAll('.radial-button');
+        buttons.forEach((btn) => {
+            const angle = parseInt(btn.dataset.angle);
+            const radius = 80;
+            const radian = (angle * Math.PI) / 180;
+            const x = Math.cos(radian) * radius + 96; // 96 = half of menu width
+            const y = Math.sin(radian) * radius + 96;
+            
+            btn.style.left = x + 'px';
+            btn.style.top = y + 'px';
+            
+            btn.addEventListener('click', () => {
+                const mode = btn.dataset.mode;
+                if (mode === 'image') {
+                    this.fileInput.click();
+                    this.closeMenu();
+                } else if (mode) {
+                    this.setMode(mode);
+                }
+            });
+        });
+    }
+    
+    toggleMenu() {
+        this.menuOpen = !this.menuOpen;
+        this.fabButton.classList.toggle('open', this.menuOpen);
+        this.radialMenu.classList.toggle('hidden', !this.menuOpen);
+        
+        const plusIcon = this.fabButton.querySelector('.fab-plus');
+        const xIcon = this.fabButton.querySelector('.fab-x');
+        
+        if (this.menuOpen) {
+            plusIcon.classList.add('hidden');
+            xIcon.classList.remove('hidden');
+        } else {
+            plusIcon.classList.remove('hidden');
+            xIcon.classList.add('hidden');
+        }
+    }
+    
+    closeMenu() {
+        this.menuOpen = false;
+        this.fabButton.classList.remove('open');
+        this.radialMenu.classList.add('hidden');
+        
+        const plusIcon = this.fabButton.querySelector('.fab-plus');
+        const xIcon = this.fabButton.querySelector('.fab-x');
+        plusIcon.classList.remove('hidden');
+        xIcon.classList.add('hidden');
+    }
+    
+    setMode(mode) {
+        this.mode = mode;
+        this.closeMenu();
+        this.showSettings();
+    }
+    
+    showSettings() {
+        this.settingsVisible = true;
+        this.settingsPanel.classList.remove('hidden');
+        this.renderSettings();
+    }
+    
+    closeSettings() {
+        this.settingsVisible = false;
+        this.settingsPanel.classList.add('hidden');
+    }
+    
+    renderSettings() {
+        const selectedBox = this.boxes.find(b => b.id === this.selectedBox);
+        
+        if (selectedBox) {
+            this.renderBoxSettings(selectedBox);
+        } else if (this.settingsVisible) {
+            this.renderModeSettings();
+        }
+    }
+    
+    renderBoxSettings(box) {
+        let content = '';
+        
+        if (box.type === 'text') {
+            content = `
+                <div class="settings-header">
+                    <div class="settings-title">
+                        <div class="settings-icon-container edit">
+                            <svg class="settings-icon edit" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 20h9"/>
+                                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                            </svg>
+                        </div>
+                        <span class="settings-title-text">Szerkesztés</span>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="settings-close-btn" onclick="notebook.selectedBox = null; notebook.renderSettings();">Bezár</button>
+                        <button class="settings-delete-btn" onclick="notebook.deleteSelectedBox();">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 6h18"/>
+                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                            </svg>
+                            Törlés
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="settings-content">
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <div class="setting-icon-container">
+                                <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="13.5" cy="6.5" r=".5"/>
+                                    <circle cx="17.5" cy="10.5" r=".5"/>
+                                    <circle cx="8.5" cy="7.5" r=".5"/>
+                                    <circle cx="6.5" cy="11.5" r=".5"/>
+                                    <circle cx="12.5" cy="13.5" r=".5"/>
+                                    <circle cx="16.5" cy="17.5" r=".5"/>
+                                    <circle cx="6.5" cy="17.5" r=".5"/>
+                                </svg>
+                            </div>
+                            <span class="setting-label-text">Szín</span>
+                        </div>
+                        <input type="color" class="color-input" value="${box.color}" onchange="notebook.updateBox(${box.id}, {color: this.value})">
+                    </div>
+                    
+                    <div class="slider-container">
+                        <div class="slider-label">
+                            <div class="setting-label">
+                                <div class="setting-icon-container">
+                                    <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="4" y1="21" x2="4" y2="14"/>
+                                        <line x1="4" y1="10" x2="4" y2="3"/>
+                                        <line x1="12" y1="21" x2="12" y2="12"/>
+                                        <line x1="12" y1="8" x2="12" y2="3"/>
+                                        <line x1="20" y1="21" x2="20" y2="16"/>
+                                        <line x1="20" y1="12" x2="20" y2="3"/>
+                                        <line x1="1" y1="14" x2="7" y2="14"/>
+                                        <line x1="9" y1="8" x2="15" y2="8"/>
+                                        <line x1="17" y1="16" x2="23" y2="16"/>
+                                    </svg>
+                                </div>
+                                <span class="setting-label-text">Méret</span>
+                            </div>
+                            <span class="slider-value">${box.fontSize}px</span>
+                        </div>
+                        <input type="range" class="brush-slider" min="10" max="72" value="${box.fontSize}" oninput="notebook.updateBox(${box.id}, {fontSize: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 24px;">
+                        <select class="style-select" onchange="notebook.updateBox(${box.id}, {fontFamily: this.value})">
+                            <option value="sans-serif" ${box.fontFamily === 'sans-serif' ? 'selected' : ''}>Sans-serif</option>
+                            <option value="serif" ${box.fontFamily === 'serif' ? 'selected' : ''}>Serif</option>
+                            <option value="monospace" ${box.fontFamily === 'monospace' ? 'selected' : ''}>Monospace</option>
+                        </select>
+                        
+                        <div class="format-buttons">
+                            <button class="format-button ${box.fontWeight === '700' ? 'active' : ''}" onclick="notebook.updateBox(${box.id}, {fontWeight: this.classList.contains('active') ? '400' : '700'}); this.classList.toggle('active');">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/>
+                                    <path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/>
+                                </svg>
+                            </button>
+                            <button class="format-button ${box.fontStyle === 'italic' ? 'active' : ''}" onclick="notebook.updateBox(${box.id}, {fontStyle: this.classList.contains('active') ? 'normal' : 'italic'}); this.classList.toggle('active');">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="19" y1="4" x2="10" y2="4"/>
+                                    <line x1="14" y1="20" x2="5" y2="20"/>
+                                    <line x1="15" y1="4" x2="9" y2="20"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="slider-container">
+                        <div class="slider-label">
+                            <span class="setting-label-text">Szélesség</span>
+                            <span class="slider-value">${box.width}px</span>
+                        </div>
+                        <input type="range" class="brush-slider" min="80" max="800" value="${box.width}" oninput="notebook.updateBox(${box.id}, {width: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
+                    </div>
+                    
+                    <div class="slider-container">
+                        <div class="slider-label">
+                            <span class="setting-label-text">Magasság</span>
+                            <span class="slider-value">${box.height}px</span>
+                        </div>
+                        <input type="range" class="brush-slider" min="40" max="400" value="${box.height}" oninput="notebook.updateBox(${box.id}, {height: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
+                    </div>
+                </div>
+            `;
+        } else if (box.type === 'link') {
+            content = `
+                <div class="settings-header">
+                    <div class="settings-title">
+                        <div class="settings-icon-container link">
+                            <svg class="settings-icon link" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                            </svg>
+                        </div>
+                        <span class="settings-title-text">Szerkesztés</span>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="settings-close-btn" onclick="notebook.selectedBox = null; notebook.renderSettings();">Bezár</button>
+                        <button class="settings-delete-btn" onclick="notebook.deleteSelectedBox();">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 6h18"/>
+                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                            </svg>
+                            Törlés
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="settings-content">
+                    <div style="margin-bottom: 24px;">
+                        <div style="margin-bottom: 8px;">
+                            <span class="setting-label-text">URL</span>
+                        </div>
+                        <input type="url" style="width: 100%; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 12px; padding: 12px 16px; color: white;" placeholder="https://..." value="${box.url}" oninput="notebook.updateBox(${box.id}, {url: this.value, text: this.value})">
+                    </div>
+                    
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <div class="setting-icon-container">
+                                <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="13.5" cy="6.5" r=".5"/>
+                                    <circle cx="17.5" cy="10.5" r=".5"/>
+                                    <circle cx="8.5" cy="7.5" r=".5"/>
+                                    <circle cx="6.5" cy="11.5" r=".5"/>
+                                    <circle cx="12.5" cy="13.5" r=".5"/>
+                                    <circle cx="16.5" cy="17.5" r=".5"/>
+                                    <circle cx="6.5" cy="17.5" r=".5"/>
+                                </svg>
+                            </div>
+                            <span class="setting-label-text">Szín</span>
+                        </div>
+                        <input type="color" class="color-input" value="${box.color}" onchange="notebook.updateBox(${box.id}, {color: this.value})">
+                    </div>
+                </div>
+            `;
+        } else if (box.type === 'image') {
+            content = `
+                <div class="settings-header">
+                    <div class="settings-title">
+                        <div class="settings-icon-container edit">
+                            <svg class="settings-icon edit" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+                                <circle cx="9" cy="9" r="2"/>
+                                <path d="M21 15l-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+                            </svg>
+                        </div>
+                        <span class="settings-title-text">Kép beállítások</span>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="settings-close-btn" onclick="notebook.selectedBox = null; notebook.renderSettings();">Bezár</button>
+                        <button class="settings-delete-btn" onclick="notebook.deleteSelectedBox();">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 6h18"/>
+                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                            </svg>
+                            Törlés
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="settings-content">
+                    <div class="slider-container">
+                        <div class="slider-label">
+                            <span class="setting-label-text">Szélesség</span>
+                            <span class="slider-value">${box.width}px</span>
+                        </div>
+                        <input type="range" class="brush-slider" min="40" max="1000" value="${box.width}" oninput="notebook.updateBox(${box.id}, {width: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
+                    </div>
+                    
+                    <div class="slider-container">
+                        <div class="slider-label">
+                            <span class="setting-label-text">Magasság</span>
+                            <span class="slider-value">${box.height}px</span>
+                        </div>
+                        <input type="range" class="brush-slider" min="40" max="800" value="${box.height}" oninput="notebook.updateBox(${box.id}, {height: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
+                    </div>
+                </div>
+            `;
+        }
+        
+        this.settingsPanel.innerHTML = content;
+    }
+    
+    renderModeSettings() {
+        let content = '';
+        
+        if (this.mode === 'draw') {
+            content = `
+                <div class="settings-header">
+                    <div class="settings-title">
+                        <div class="settings-icon-container draw">
+                            <svg class="settings-icon draw" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                            </svg>
+                        </div>
+                        <span class="settings-title-text">Toll beállítások</span>
+                    </div>
+                    <button class="settings-close-btn" onclick="notebook.closeSettings();">Bezár</button>
+                </div>
+                
+                <div class="settings-content">
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <div class="setting-icon-container">
+                                <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="13.5" cy="6.5" r=".5"/>
+                                    <circle cx="17.5" cy="10.5" r=".5"/>
+                                    <circle cx="8.5" cy="7.5" r=".5"/>
+                                    <circle cx="6.5" cy="11.5" r=".5"/>
+                                    <circle cx="12.5" cy="13.5" r=".5"/>
+                                    <circle cx="16.5" cy="17.5" r=".5"/>
+                                    <circle cx="6.5" cy="17.5" r=".5"/>
+                                </svg>
+                            </div>
+                            <span class="setting-label-text">Szín</span>
+                        </div>
+                        <input type="color" class="color-input" value="${this.brushColor}" onchange="notebook.brushColor = this.value">
+                    </div>
+                    
+                    <div class="slider-container">
+                        <div class="slider-label">
+                            <div class="setting-label">
+                                <div class="setting-icon-container">
+                                    <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="4" y1="21" x2="4" y2="14"/>
+                                        <line x1="4" y1="10" x2="4" y2="3"/>
+                                        <line x1="12" y1="21" x2="12" y2="12"/>
+                                        <line x1="12" y1="8" x2="12" y2="3"/>
+                                        <line x1="20" y1="21" x2="20" y2="16"/>
+                                        <line x1="20" y1="12" x2="20" y2="3"/>
+                                        <line x1="1" y1="14" x2="7" y2="14"/>
+                                        <line x1="9" y1="8" x2="15" y2="8"/>
+                                        <line x1="17" y1="16" x2="23" y2="16"/>
+                                    </svg>
+                                </div>
+                                <span class="setting-label-text">Méret</span>
+                            </div>
+                            <span class="slider-value">${this.brushSize}px</span>
+                        </div>
+                        <input type="range" class="brush-slider" min="1" max="40" value="${this.brushSize}" oninput="notebook.brushSize = parseInt(this.value); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
+                    </div>
+                    
+                    <div class="style-controls">
+                        <div class="setting-label">
+                            <div class="setting-icon-container">
+                                <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 20h9"/>
+                                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                                </svg>
+                            </div>
+                            <span class="setting-label-text">Stílus</span>
+                        </div>
+                        <select class="style-select" onchange="notebook.brushStyle = this.value">
+                            <option value="round" ${this.brushStyle === 'round' ? 'selected' : ''}>Kerek</option>
+                            <option value="square" ${this.brushStyle === 'square' ? 'selected' : ''}>Négyzet</option>
+                        </select>
+                    </div>
+                    
+                    <div class="quick-colors">
+                        <div class="quick-colors-label">Gyors színek</div>
+                        <div class="quick-colors-grid">
+                            <button class="quick-color-btn white" onclick="notebook.brushColor = '#ffffff'; notebook.renderSettings();">Fehér</button>
+                            <button class="quick-color-btn yellow" onclick="notebook.brushColor = '#ffcc00'; notebook.renderSettings();">Sárga</button>
+                            <button class="quick-color-btn green" onclick="notebook.brushColor = '#00cc99'; notebook.renderSettings();">Zöld</button>
+                            <button class="quick-color-btn red" onclick="notebook.brushColor = '#ff4444'; notebook.renderSettings();">Piros</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else if (this.mode === 'text') {
+            content = `
+                <div class="settings-header">
+                    <div class="settings-title">
+                        <div class="settings-icon-container text">
+                            <svg class="settings-icon text" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="4 7 4 4 20 4 20 7"/>
+                                <line x1="9" y1="20" x2="15" y2="20"/>
+                                <line x1="12" y1="4" x2="12" y2="20"/>
+                            </svg>
+                        </div>
+                        <span class="settings-title-text">Szöveg mód</span>
+                    </div>
+                    <button class="settings-close-btn" onclick="notebook.closeSettings();">Bezár</button>
+                </div>
+                
+                <div class="settings-content">
+                    <div class="info-box">
+                        <div class="info-item">
+                            <div class="info-icon-container green">
+                                <span style="font-size: 14px;">📝</span>
+                            </div>
+                            <p class="info-text">Kattints bárhová a vászonra új szövegdoboz létrehozásához</p>
+                        </div>
+                        
+                        <div class="info-item">
+                            <div class="info-icon-container blue">
+                                <span style="font-size: 14px;">✏️</span>
+                            </div>
+                            <p class="info-text">A doboz kiválasztása után további formázási lehetőségek jelennek meg</p>
+                        </div>
+                        
+                        <div class="info-item">
+                            <div class="info-icon-container purple">
+                                <span style="font-size: 14px;">🎨</span>
+                            </div>
+                            <p class="info-text">Szín, méret, betűtípus és szélesség mind módosítható</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else if (this.mode === 'link') {
+            content = `
+                <div class="settings-header">
+                    <div class="settings-title">
+                        <div class="settings-icon-container link">
+                            <svg class="settings-icon link" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                            </svg>
+                        </div>
+                        <span class="settings-title-text">Hivatkozás mód</span>
+                    </div>
+                    <button class="settings-close-btn" onclick="notebook.closeSettings();">Bezár</button>
+                </div>
+                
+                <div class="settings-content">
+                    <div class="info-box">
+                        <p style="margin-bottom: 8px; color: rgba(255,255,255,0.9); font-weight: 500;">🔗 Kattints a vászonra hivatkozás hozzáadásához</p>
+                        <p style="color: rgba(255,255,255,0.9); font-weight: 500;">🌐 Add meg az URL-t a megjelenő párbeszédablakban</p>
+                    </div>
+                </div>
+            `;
+        }
+        
+        this.settingsPanel.innerHTML = content;
+    }
+    
+    eraseAt(pos) {
+        const radius = Math.max(8, this.brushSize * 1.2);
+        this.strokes = this.strokes.filter(stroke => {
+            for (const point of stroke.points) {
+                const dx = point.x - pos.x;
+                const dy = point.y - pos.y;
+                if (dx * dx + dy * dy <= radius * radius) {
+                    return false;
+                }
+            }
+            return true;
+        });
+        this.redrawCanvas();
+    }
+    
+    addTextAt(pos) {
+        const snapped = this.snapToGrid(pos.x, pos.y);
+        const id = Date.now() + Math.random();
+        const box = {
+            id,
+            type: 'text',
+            x: snapped.x,
+            y: snapped.y,
+            width: 280,
+            height: 80,
+            text: 'Írj ide',
+            color: '#ffffff',
+            fontSize: 16,
+            fontFamily: 'sans-serif',
+            fontWeight: '400',
+            fontStyle: 'normal'
+        };
+        
+        this.boxes.push(box);
+        this.selectedBox = id;
+        this.setMode('none');
+        this.render();
+    }
+    
+    addLinkAt(pos) {
+        const url = prompt('Hivatkozás URL (https://...)');
+        if (!url) return;
+        
+        const snapped = this.snapToGrid(pos.x, pos.y);
+        const id = Date.now() + Math.random();
+        const box = {
+            id,
+            type: 'link',
+            x: snapped.x,
+            y: snapped.y,
+            width: 260,
+            height: 40,
+            url,
+            text: url,
+            color: '#9be2ff'
+        };
+        
+        this.boxes.push(box);
+        this.selectedBox = id;
+        this.setMode('none');
+        this.render();
+    }
+    
+    handleImageFile(file) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const src = ev.target.result;
+            const pos = this.snapToGrid(this.lastPointer.x, this.lastPointer.y);
+            const id = Date.now() + Math.random();
+            const box = {
+                id,
+                type: 'image',
+                x: pos.x - 80,
+                y: pos.y - 60,
+                width: 160,
+                height: 120,
+                src
+            };
+            
+            this.boxes.push(box);
+            this.selectedBox = id;
+            this.setMode('none');
+            this.render();
+        };
+        reader.readAsDataURL(file);
+    }
+    
+    updateBox(id, updates) {
+        const index = this.boxes.findIndex(b => b.id === id);
+        if (index !== -1) {
+            this.boxes[index] = { ...this.boxes[index], ...updates };
+            this.render();
+        }
+    }
+    
+    deleteSelectedBox() {
+        if (!this.selectedBox) return;
+        this.boxes = this.boxes.filter(b => b.id !== this.selectedBox);
+        this.selectedBox = null;
+        this.closeSettings();
+        this.render();
+    }
+    
+    selectBox(id) {
+        this.selectedBox = id;
+        this.renderSettings();
+        this.render();
+    }
+    
+    startDragBox(id, startPos) {
+        const box = this.boxes.find(b => b.id === id);
+        if (!box) return;
+        
+        this.dragState = {
+            id,
+            dragging: true,
+            startX: startPos.x,
+            startY: startPos.y,
+            origX: box.x,
+            origY: box.y
+        };
+        
+        this.selectBox(id);
+    }
+    
+    render() {
+        // Clear existing boxes
+        this.boxesContainer.innerHTML = '';
+        
+        // Render all boxes
+        this.boxes.forEach(box => {
+            const boxElement = document.createElement('div');
+            boxElement.className = 'notebook-box';
+            boxElement.dataset.id = box.id;
+            boxElement.style.left = box.x + 'px';
+            boxElement.style.top = box.y + 'px';
+            boxElement.style.width = box.width + 'px';
+            boxElement.style.height = box.height + 'px';
+            
+            if (this.selectedBox === box.id) {
+                boxElement.classList.add('selected');
+            }
+            
+            if (box.type === 'text') {
+                const textarea = document.createElement('textarea');
+                textarea.className = 'text-box-content';
+                textarea.value = box.text;
+                textarea.placeholder = 'Írj ide...';
+                textarea.style.color = box.color;
+                textarea.style.fontSize = box.fontSize + 'px';
+                textarea.style.fontFamily = box.fontFamily;
+                textarea.style.fontWeight = box.fontWeight;
+                textarea.style.fontStyle = box.fontStyle;
+                
+                textarea.addEventListener('input', (e) => {
+                    this.updateBox(box.id, { text: e.target.value });
+                });
+                
+                textarea.addEventListener('focus', () => {
+                    this.selectBox(box.id);
+                });
+                
+                boxElement.appendChild(textarea);
+                
+            } else if (box.type === 'link') {
+                const linkElement = document.createElement('div');
+                linkElement.className = 'link-box-content';
+                linkElement.style.color = box.color;
+                
+                linkElement.innerHTML = `
+                    <svg class="link-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                    </svg>
+                    ${box.text}
+                `;
+                
+                linkElement.addEventListener('click', () => {
+                    this.selectBox(box.id);
+                });
+                
+                linkElement.addEventListener('dblclick', () => {
+                    window.open(box.url, '_blank');
+                });
+                
+                boxElement.appendChild(linkElement);
+                
+            } else if (box.type === 'image') {
+                const img = document.createElement('img');
+                img.className = 'image-box-content';
+                img.src = box.src;
+                img.alt = 'img';
+                
+                img.addEventListener('click', () => {
+                    this.selectBox(box.id);
+                });
+                
+                boxElement.appendChild(img);
+            }
+            
+            // Add drag functionality
+            boxElement.addEventListener('pointerdown', (e) => {
+                if (e.target.closest('.text-box-content')) return; // Don't drag when editing text
+                
+                const pos = this.getPointerPos(e);
+                this.startDragBox(box.id, pos);
+                boxElement.setPointerCapture && boxElement.setPointerCapture(e.pointerId);
+            });
+            
+            this.boxesContainer.appendChild(boxElement);
+        });
+    }
+}
+
+// Initialize the notebook
+let notebook;
+document.addEventListener('DOMContentLoaded', () => {
+    notebook = new LearningNotebook();
+});
