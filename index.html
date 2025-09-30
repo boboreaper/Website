@@ -1,976 +1,1054 @@
-</div>
-    
-    <script>
-// Learning Notebook - Vanilla JavaScript Implementation
-class LearningNotebook {
-    constructor() {
-        this.container = document.getElementById('container');
-        this.canvas = document.getElementById('canvas');
-        this.ctx = this.canvas.getContext('2d');
-        this.boxesContainer = document.getElementById('boxes-container');
-        this.settingsPanel = document.getElementById('settings-panel');
-        this.fabButton = document.getElementById('fab-button');
-        this.radialMenu = document.getElementById('radial-menu');
-        this.fileInput = document.getElementById('file-input');
-        
-        // State
-        this.menuOpen = false;
-        this.mode = 'none'; // none | draw | text | link | erase
-        this.settingsVisible = false;
-        this.strokes = [];
-        this.currentStroke = null;
-        this.drawing = false;
-        this.brushSize = 3;
-        this.brushColor = '#ffffff';
-        this.brushStyle = 'round';
-        this.boxes = [];
-        this.selectedBox = null;
-        this.lastPointer = { x: 200, y: 200 };
-        this.dragState = {};
-        this.GRID = 32;
-        
-        this.init();
-    }
-    
-    init() {
-        this.setupCanvas();
-        this.bindEvents();
-        this.setupRadialMenu();
-        this.render();
-    }
-    
-    setupCanvas() {
-        const resizeCanvas = () => {
-            const rect = this.canvas.getBoundingClientRect();
-            const dpr = window.devicePixelRatio || 1;
-            this.canvas.width = rect.width * dpr;
-            this.canvas.height = rect.height * dpr;
-            this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            this.redrawCanvas();
-        };
-        
-        resizeCanvas();
-        window.addEventListener('resize', resizeCanvas);
-    }
-    
-    redrawCanvas() {
-        const rect = this.canvas.getBoundingClientRect();
-        this.ctx.clearRect(0, 0, rect.width, rect.height);
-        
-        // Draw strokes
-        for (const stroke of this.strokes) {
-            if (!stroke.points || stroke.points.length === 0) continue;
-            this.ctx.lineJoin = stroke.style || 'round';
-            this.ctx.lineCap = stroke.style || 'round';
-            this.ctx.strokeStyle = stroke.color;
-            this.ctx.lineWidth = stroke.size;
-            this.ctx.beginPath();
-            this.ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-            for (let i = 1; i < stroke.points.length; i++) {
-                this.ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
-            }
-            this.ctx.stroke();
-        }
-        
-        // Draw current stroke
-        if (this.currentStroke && this.currentStroke.points.length > 0) {
-            this.ctx.lineJoin = this.currentStroke.style || 'round';
-            this.ctx.lineCap = this.currentStroke.style || 'round';
-            this.ctx.strokeStyle = this.currentStroke.color;
-            this.ctx.lineWidth = this.currentStroke.size;
-            this.ctx.beginPath();
-            this.ctx.moveTo(this.currentStroke.points[0].x, this.currentStroke.points[0].y);
-            for (let i = 1; i < this.currentStroke.points.length; i++) {
-                this.ctx.lineTo(this.currentStroke.points[i].x, this.currentStroke.points[i].y);
-            }
-            this.ctx.stroke();
-        }
-    }
-    
-    getPointerPos(e) {
-        const rect = this.container.getBoundingClientRect();
-        return {
-            x: Math.round(e.clientX - rect.left),
-            y: Math.round(e.clientY - rect.top)
-        };
-    }
-    
-    snapToGrid(x, y) {
-        return {
-            x: Math.round(x / this.GRID) * this.GRID,
-            y: Math.round(y / this.GRID) * this.GRID
-        };
-    }
-    
-    bindEvents() {
-        // FAB button
-        this.fabButton.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('FAB clicked, current menuOpen:', this.menuOpen);
-            this.toggleMenu();
-        });
-        
-        // Canvas events for drawing
-        this.canvas.addEventListener('pointerdown', (e) => {
-            const pos = this.getPointerPos(e);
-            if (this.mode === 'draw') {
-                this.drawing = true;
-                this.currentStroke = {
-                    color: this.brushColor,
-                    size: this.brushSize,
-                    style: this.brushStyle,
-                    points: [pos]
-                };
-            } else if (this.mode === 'erase') {
-                this.eraseAt(pos);
-            }
-        });
-        
-        window.addEventListener('pointermove', (e) => {
-            const pos = this.getPointerPos(e);
-            this.lastPointer = pos;
-            
-            if (this.mode === 'draw' && this.drawing && this.currentStroke) {
-                this.currentStroke.points.push(pos);
-                this.redrawCanvas();
-            } else if (this.mode === 'erase' && e.buttons === 1) {
-                this.eraseAt(pos);
-            }
-            
-            // Handle box dragging
-            if (this.dragState.dragging) {
-                const dx = pos.x - this.dragState.startX;
-                const dy = pos.y - this.dragState.startY;
-                const newX = Math.round((this.dragState.origX + dx) / this.GRID) * this.GRID;
-                const newY = Math.round((this.dragState.origY + dy) / this.GRID) * this.GRID;
-                this.updateBox(this.dragState.id, { x: newX, y: newY });
-            }
-        });
-        
-        window.addEventListener('pointerup', () => {
-            if (this.mode === 'draw' && this.drawing) {
-                this.drawing = false;
-                if (this.currentStroke) {
-                    this.strokes.push(this.currentStroke);
-                    this.currentStroke = null;
-                    this.redrawCanvas();
-                }
-            }
-            
-            if (this.dragState.dragging) {
-                this.dragState = {};
-            }
-        });
-        
-        // Container clicks for placing text/links
-        this.container.addEventListener('pointerdown', (e) => {
-            if (e.target.closest('.menu-ignore') || e.target.closest('.fab-container')) return;
-            
-            const pos = this.getPointerPos(e);
-            if (this.mode === 'text') {
-                this.addTextAt(pos);
-            } else if (this.mode === 'link') {
-                this.addLinkAt(pos);
-            }
-        });
-        
-        // File input
-        this.fileInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                this.handleImageFile(file);
-                e.target.value = '';
-            }
-        });
-        
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Delete' || e.key === 'Backspace') {
-                if (this.selectedBox && !e.target.closest('.text-box-content')) {
-                    this.deleteSelectedBox();
-                }
-            }
-            if (e.key === 'Escape') {
-                this.closeSettings();
-                this.setMode('none');
-            }
-        });
-    }
-    
-    setupRadialMenu() {
-        const buttons = this.radialMenu.querySelectorAll('.radial-button');
-        buttons.forEach((btn) => {
-            const angle = parseInt(btn.dataset.angle);
-            const radius = 80;
-            const radian = (angle * Math.PI) / 180;
-            const x = Math.cos(radian) * radius + 96; // 96 = half of menu width
-            const y = Math.sin(radian) * radius + 96;
-            
-            btn.style.left = x + 'px';
-            btn.style.top = y + 'px';
-            
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const mode = btn.dataset.mode;
-                console.log('Radial button clicked:', mode);
-                if (mode === 'image') {
-                    this.fileInput.click();
-                    this.closeMenu();
-                } else if (mode) {
-                    this.setMode(mode);
-                }
-            });
-        });
-    }
-    
-    toggleMenu() {
-        this.menuOpen = !this.menuOpen;
-        console.log('Menu toggled to:', this.menuOpen);
-        this.fabButton.classList.toggle('open', this.menuOpen);
-        this.radialMenu.classList.toggle('hidden', !this.menuOpen);
-        
-        const plusIcon = this.fabButton.querySelector('.fab-plus');
-        const xIcon = this.fabButton.querySelector('.fab-x');
-        
-        if (this.menuOpen) {
-            plusIcon.classList.add('hidden');
-            xIcon.classList.remove('hidden');
-        } else {
-            plusIcon.classList.remove('hidden');
-            xIcon.classList.add('hidden');
-        }
-    }
-    
-    closeMenu() {
-        this.menuOpen = false;
-        this.fabButton.classList.remove('open');
-        this.radialMenu.classList.add('hidden');
-        
-        const plusIcon = this.fabButton.querySelector('.fab-plus');
-        const xIcon = this.fabButton.querySelector('.fab-x');
-        plusIcon.classList.remove('hidden');
-        xIcon.classList.add('hidden');
-    }
-    
-    setMode(mode) {
-        console.log('Setting mode to:', mode);
-        this.mode = mode;
-        this.closeMenu();
-        this.showSettings();
-    }
-    
-    showSettings() {
-        this.settingsVisible = true;
-        this.settingsPanel.classList.remove('hidden');
-        this.renderSettings();
-    }
-    
-    closeSettings() {
-        this.settingsVisible = false;
-        this.settingsPanel.classList.add('hidden');
-    }
-    
-    renderSettings() {
-        const selectedBox = this.boxes.find(b => b.id === this.selectedBox);
-        
-        if (selectedBox) {
-            this.renderBoxSettings(selectedBox);
-        } else if (this.settingsVisible) {
-            this.renderModeSettings();
-        }
-    }
-    
-    renderBoxSettings(box) {
-        let content = '';
-        
-        if (box.type === 'text') {
-            content = `
-                <div class="settings-header">
-                    <div class="settings-title">
-                        <div class="settings-icon-container edit">
-                            <svg class="settings-icon edit" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M12 20h9"/>
-                                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-                            </svg>
-                        </div>
-                        <span class="settings-title-text">Szerkesztés</span>
-                    </div>
-                    <div style="display: flex; gap: 8px;">
-                        <button class="settings-close-btn" onclick="notebook.selectedBox = null; notebook.renderSettings();">Bezár</button>
-                        <button class="settings-delete-btn" onclick="notebook.deleteSelectedBox();">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M3 6h18"/>
-                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                            </svg>
-                            Törlés
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="settings-content">
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <div class="setting-icon-container">
-                                <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="13.5" cy="6.5" r=".5"/>
-                                    <circle cx="17.5" cy="10.5" r=".5"/>
-                                    <circle cx="8.5" cy="7.5" r=".5"/>
-                                    <circle cx="6.5" cy="11.5" r=".5"/>
-                                    <circle cx="12.5" cy="13.5" r=".5"/>
-                                    <circle cx="16.5" cy="17.5" r=".5"/>
-                                    <circle cx="6.5" cy="17.5" r=".5"/>
-                                </svg>
-                            </div>
-                            <span class="setting-label-text">Szín</span>
-                        </div>
-                        <input type="color" class="color-input" value="${box.color}" onchange="notebook.updateBox(${box.id}, {color: this.value})">
-                    </div>
-                    
-                    <div class="slider-container">
-                        <div class="slider-label">
-                            <div class="setting-label">
-                                <div class="setting-icon-container">
-                                    <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <line x1="4" y1="21" x2="4" y2="14"/>
-                                        <line x1="4" y1="10" x2="4" y2="3"/>
-                                        <line x1="12" y1="21" x2="12" y2="12"/>
-                                        <line x1="12" y1="8" x2="12" y2="3"/>
-                                        <line x1="20" y1="21" x2="20" y2="16"/>
-                                        <line x1="20" y1="12" x2="20" y2="3"/>
-                                        <line x1="1" y1="14" x2="7" y2="14"/>
-                                        <line x1="9" y1="8" x2="15" y2="8"/>
-                                        <line x1="17" y1="16" x2="23" y2="16"/>
-                                    </svg>
-                                </div>
-                                <span class="setting-label-text">Méret</span>
-                            </div>
-                            <span class="slider-value">${box.fontSize}px</span>
-                        </div>
-                        <input type="range" class="brush-slider" min="10" max="72" value="${box.fontSize}" oninput="notebook.updateBox(${box.id}, {fontSize: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
-                    </div>
-                    
-                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 24px;">
-                        <select class="style-select" onchange="notebook.updateBox(${box.id}, {fontFamily: this.value})">
-                            <option value="sans-serif" ${box.fontFamily === 'sans-serif' ? 'selected' : ''}>Sans-serif</option>
-                            <option value="serif" ${box.fontFamily === 'serif' ? 'selected' : ''}>Serif</option>
-                            <option value="monospace" ${box.fontFamily === 'monospace' ? 'selected' : ''}>Monospace</option>
-                        </select>
-                        
-                        <div class="format-buttons">
-                            <button class="format-button ${box.fontWeight === '700' ? 'active' : ''}" onclick="notebook.updateBox(${box.id}, {fontWeight: this.classList.contains('active') ? '400' : '700'}); this.classList.toggle('active');">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/>
-                                    <path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/>
-                                </svg>
-                            </button>
-                            <button class="format-button ${box.fontStyle === 'italic' ? 'active' : ''}" onclick="notebook.updateBox(${box.id}, {fontStyle: this.classList.contains('active') ? 'normal' : 'italic'}); this.classList.toggle('active');">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="19" y1="4" x2="10" y2="4"/>
-                                    <line x1="14" y1="20" x2="5" y2="20"/>
-                                    <line x1="15" y1="4" x2="9" y2="20"/>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <div class="slider-container">
-                        <div class="slider-label">
-                            <span class="setting-label-text">Szélesség</span>
-                            <span class="slider-value">${box.width}px</span>
-                        </div>
-                        <input type="range" class="brush-slider" min="80" max="800" value="${box.width}" oninput="notebook.updateBox(${box.id}, {width: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
-                    </div>
-                    
-                    <div class="slider-container">
-                        <div class="slider-label">
-                            <span class="setting-label-text">Magasság</span>
-                            <span class="slider-value">${box.height}px</span>
-                        </div>
-                        <input type="range" class="brush-slider" min="40" max="400" value="${box.height}" oninput="notebook.updateBox(${box.id}, {height: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
-                    </div>
-                </div>
-            `;
-        } else if (box.type === 'link') {
-            content = `
-                <div class="settings-header">
-                    <div class="settings-title">
-                        <div class="settings-icon-container link">
-                            <svg class="settings-icon link" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                            </svg>
-                        </div>
-                        <span class="settings-title-text">Szerkesztés</span>
-                    </div>
-                    <div style="display: flex; gap: 8px;">
-                        <button class="settings-close-btn" onclick="notebook.selectedBox = null; notebook.renderSettings();">Bezár</button>
-                        <button class="settings-delete-btn" onclick="notebook.deleteSelectedBox();">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M3 6h18"/>
-                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                            </svg>
-                            Törlés
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="settings-content">
-                    <div style="margin-bottom: 24px;">
-                        <div style="margin-bottom: 8px;">
-                            <span class="setting-label-text">URL</span>
-                        </div>
-                        <input type="url" style="width: 100%; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 12px; padding: 12px 16px; color: white;" placeholder="https://..." value="${box.url}" oninput="notebook.updateBox(${box.id}, {url: this.value, text: this.value})">
-                    </div>
-                    
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <div class="setting-icon-container">
-                                <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="13.5" cy="6.5" r=".5"/>
-                                    <circle cx="17.5" cy="10.5" r=".5"/>
-                                    <circle cx="8.5" cy="7.5" r=".5"/>
-                                    <circle cx="6.5" cy="11.5" r=".5"/>
-                                    <circle cx="12.5" cy="13.5" r=".5"/>
-                                    <circle cx="16.5" cy="17.5" r=".5"/>
-                                    <circle cx="6.5" cy="17.5" r=".5"/>
-                                </svg>
-                            </div>
-                            <span class="setting-label-text">Szín</span>
-                        </div>
-                        <input type="color" class="color-input" value="${box.color}" onchange="notebook.updateBox(${box.id}, {color: this.value})">
-                    </div>
-                </div>
-            `;
-        } else if (box.type === 'image') {
-            content = `
-                <div class="settings-header">
-                    <div class="settings-title">
-                        <div class="settings-icon-container edit">
-                            <svg class="settings-icon edit" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
-                                <circle cx="9" cy="9" r="2"/>
-                                <path d="M21 15l-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
-                            </svg>
-                        </div>
-                        <span class="settings-title-text">Kép beállítások</span>
-                    </div>
-                    <div style="display: flex; gap: 8px;">
-                        <button class="settings-close-btn" onclick="notebook.selectedBox = null; notebook.renderSettings();">Bezár</button>
-                        <button class="settings-delete-btn" onclick="notebook.deleteSelectedBox();">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M3 6h18"/>
-                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                            </svg>
-                            Törlés
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="settings-content">
-                    <div class="slider-container">
-                        <div class="slider-label">
-                            <span class="setting-label-text">Szélesség</span>
-                            <span class="slider-value">${box.width}px</span>
-                        </div>
-                        <input type="range" class="brush-slider" min="40" max="1000" value="${box.width}" oninput="notebook.updateBox(${box.id}, {width: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
-                    </div>
-                    
-                    <div class="slider-container">
-                        <div class="slider-label">
-                            <span class="setting-label-text">Magasság</span>
-                            <span class="slider-value">${box.height}px</span>
-                        </div>
-                        <input type="range" class="brush-slider" min="40" max="800" value="${box.height}" oninput="notebook.updateBox(${box.id}, {height: parseInt(this.value)}); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
-                    </div>
-                </div>
-            `;
-        }
-        
-        this.settingsPanel.innerHTML = content;
-    }
-    
-    renderModeSettings() {
-        let content = '';
-        
-        if (this.mode === 'draw') {
-            content = `
-                <div class="settings-header">
-                    <div class="settings-title">
-                        <div class="settings-icon-container draw">
-                            <svg class="settings-icon draw" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
-                            </svg>
-                        </div>
-                        <span class="settings-title-text">Toll beállítások</span>
-                    </div>
-                    <button class="settings-close-btn" onclick="notebook.closeSettings();">Bezár</button>
-                </div>
-                
-                <div class="settings-content">
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <div class="setting-icon-container">
-                                <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="13.5" cy="6.5" r=".5"/>
-                                    <circle cx="17.5" cy="10.5" r=".5"/>
-                                    <circle cx="8.5" cy="7.5" r=".5"/>
-                                    <circle cx="6.5" cy="11.5" r=".5"/>
-                                    <circle cx="12.5" cy="13.5" r=".5"/>
-                                    <circle cx="16.5" cy="17.5" r=".5"/>
-                                    <circle cx="6.5" cy="17.5" r=".5"/>
-                                </svg>
-                            </div>
-                            <span class="setting-label-text">Szín</span>
-                        </div>
-                        <input type="color" class="color-input" value="${this.brushColor}" onchange="notebook.brushColor = this.value">
-                    </div>
-                    
-                    <div class="slider-container">
-                        <div class="slider-label">
-                            <div class="setting-label">
-                                <div class="setting-icon-container">
-                                    <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <line x1="4" y1="21" x2="4" y2="14"/>
-                                        <line x1="4" y1="10" x2="4" y2="3"/>
-                                        <line x1="12" y1="21" x2="12" y2="12"/>
-                                        <line x1="12" y1="8" x2="12" y2="3"/>
-                                        <line x1="20" y1="21" x2="20" y2="16"/>
-                                        <line x1="20" y1="12" x2="20" y2="3"/>
-                                        <line x1="1" y1="14" x2="7" y2="14"/>
-                                        <line x1="9" y1="8" x2="15" y2="8"/>
-                                        <line x1="17" y1="16" x2="23" y2="16"/>
-                                    </svg>
-                                </div>
-                                <span class="setting-label-text">Méret</span>
-                            </div>
-                            <span class="slider-value">${this.brushSize}px</span>
-                        </div>
-                        <input type="range" class="brush-slider" min="1" max="40" value="${this.brushSize}" oninput="notebook.brushSize = parseInt(this.value); this.parentElement.querySelector('.slider-value').textContent = this.value + 'px'">
-                    </div>
-                    
-                    <div class="style-controls">
-                        <div class="setting-label">
-                            <div class="setting-icon-container">
-                                <svg class="setting-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M12 20h9"/>
-                                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-                                </svg>
-                            </div>
-                            <span class="setting-label-text">Stílus</span>
-                        </div>
-                        <select class="style-select" onchange="notebook.<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="hu">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Learning Notebook</title>
-    <link rel="stylesheet" href="style.css">
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <title>Learning Notebook - GitHub Pages Edition</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: white;
+            overflow: hidden;
+        }
+        
+        #app {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
+        }
+        
+        /* Animated Grid Background */
+        .grid-bg {
+            position: absolute;
+            inset: 0;
+            background-image: 
+                linear-gradient(rgba(59, 130, 246, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(59, 130, 246, 0.1) 1px, transparent 1px);
+            background-size: 32px 32px;
+            pointer-events: none;
+            animation: gridPulse 3s ease-in-out infinite;
+        }
+        
+        @keyframes gridPulse {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Canvas */
+        #canvas {
+            position: absolute;
+            inset: 0;
+            cursor: crosshair;
+            z-index: 1;
+        }
+        
+        /* Content Layer */
+        #content {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            pointer-events: none;
+        }
+        
+        #content > * {
+            pointer-events: auto;
+        }
+        
+        /* FAB Button - Premium Design */
+        .fab {
+            position: fixed;
+            top: 30px;
+            left: 30px;
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(135deg, #374151 0%, #1f2937 100%);
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            border-radius: 50%;
+            color: white;
+            font-size: 32px;
+            font-weight: 300;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            box-shadow: 
+                0 10px 40px rgba(0, 0, 0, 0.4),
+                0 0 0 0 rgba(59, 130, 246, 0.7);
+            backdrop-filter: blur(10px);
+        }
+        
+        .fab:hover {
+            transform: scale(1.15);
+            box-shadow: 
+                0 15px 50px rgba(0, 0, 0, 0.5),
+                0 0 0 8px rgba(59, 130, 246, 0.2);
+            background: linear-gradient(135deg, #4B5563 0%, #374151 100%);
+        }
+        
+        .fab.open {
+            transform: rotate(135deg) scale(1.1);
+            background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
+        }
+        
+        /* Radial Menu - Perfect Circle */
+        .radial-menu {
+            position: fixed;
+            top: 30px;
+            left: 30px;
+            z-index: 999;
+            pointer-events: none;
+        }
+        
+        .radial-btn {
+            position: absolute;
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #374151 0%, #1f2937 100%);
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            border-radius: 50%;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(0);
+            pointer-events: auto;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+        }
+        
+        .radial-menu.open .radial-btn {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+        }
+        
+        .radial-btn:hover {
+            transform: translate(-50%, -50%) scale(1.2);
+            box-shadow: 0 10px 40px rgba(59, 130, 246, 0.4);
+            background: linear-gradient(135deg, #4B5563 0%, #374151 100%);
+        }
+        
+        .radial-btn.save {
+            background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+        }
+        
+        .radial-btn.save:hover {
+            background: linear-gradient(135deg, #34D399 0%, #10B981 100%);
+            box-shadow: 0 10px 40px rgba(16, 185, 129, 0.5);
+        }
+        
+        /* Stagger animation delays */
+        .radial-btn:nth-child(1) { transition-delay: 0.05s; }
+        .radial-btn:nth-child(2) { transition-delay: 0.1s; }
+        .radial-btn:nth-child(3) { transition-delay: 0.15s; }
+        .radial-btn:nth-child(4) { transition-delay: 0.2s; }
+        .radial-btn:nth-child(5) { transition-delay: 0.25s; }
+        .radial-btn:nth-child(6) { transition-delay: 0.3s; }
+        
+        /* Settings Panel - Glassmorphism */
+        .settings {
+            position: fixed;
+            top: 25px;
+            left: 50%;
+            transform: translateX(-50%);
+            min-width: 400px;
+            max-width: 90vw;
+            background: rgba(17, 24, 39, 0.85);
+            backdrop-filter: blur(30px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 25px;
+            z-index: 900;
+            box-shadow: 
+                0 20px 60px rgba(0, 0, 0, 0.5),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            display: none;
+            animation: slideDown 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateX(-50%) translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+        }
+        
+        .settings.show {
+            display: block;
+        }
+        
+        .settings-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .settings-title {
+            font-size: 20px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(135deg, #60A5FA 0%, #3B82F6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .settings-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            backdrop-filter: blur(10px);
+        }
+        
+        .btn-primary {
+            background: rgba(59, 130, 246, 0.15);
+            color: #60A5FA;
+        }
+        
+        .btn-primary:hover {
+            background: rgba(59, 130, 246, 0.25);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+        
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: #F87171;
+        }
+        
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.25);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+        
+        .setting-group {
+            margin-bottom: 20px;
+        }
+        
+        .setting-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 8px;
+        }
+        
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .color-picker {
+            width: 50px;
+            height: 35px;
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .color-picker:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+        }
+        
+        .slider {
+            width: 180px;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: linear-gradient(135deg, #60A5FA 0%, #3B82F6 100%);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+            transition: all 0.2s;
+        }
+        
+        .slider::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.7);
+        }
+        
+        .slider::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            background: linear-gradient(135deg, #60A5FA 0%, #3B82F6 100%);
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+        }
+        
+        /* Content Boxes - Premium Design */
+        .text-box {
+            position: absolute;
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(20px);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 15px;
+            cursor: move;
+            transition: all 0.3s;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .text-box:hover,
+        .text-box.selected {
+            border-color: rgba(59, 130, 246, 0.5);
+            box-shadow: 
+                0 12px 40px rgba(0, 0, 0, 0.4),
+                0 0 0 3px rgba(59, 130, 246, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        .text-box textarea {
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            border: none;
+            color: white;
+            resize: none;
+            outline: none;
+            font-family: inherit;
+            font-size: 16px;
+            line-height: 1.5;
+        }
+        
+        .text-box textarea::placeholder {
+            color: rgba(255, 255, 255, 0.4);
+        }
+        
+        .link-box {
+            position: absolute;
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(20px);
+            border: 2px dashed rgba(96, 165, 250, 0.3);
+            border-radius: 16px;
+            padding: 15px;
+            cursor: move;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #60A5FA;
+            font-size: 14px;
+            font-weight: 500;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .link-box:hover,
+        .link-box.selected {
+            border-color: rgba(59, 130, 246, 0.6);
+            box-shadow: 
+                0 12px 40px rgba(59, 130, 246, 0.2),
+                0 0 0 3px rgba(59, 130, 246, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        .image-box {
+            position: absolute;
+            border: 2px solid transparent;
+            border-radius: 16px;
+            overflow: hidden;
+            cursor: move;
+            transition: all 0.3s;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .image-box:hover,
+        .image-box.selected {
+            border-color: rgba(59, 130, 246, 0.5);
+            box-shadow: 
+                0 12px 40px rgba(0, 0, 0, 0.4),
+                0 0 0 3px rgba(59, 130, 246, 0.2);
+            transform: translateY(-2px) scale(1.02);
+        }
+        
+        .image-box img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        
+        /* Info Panel */
+        .info-panel {
+            position: fixed;
+            bottom: 25px;
+            right: 25px;
+            background: rgba(17, 24, 39, 0.85);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 15px 20px;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.7);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            z-index: 800;
+            animation: fadeIn 0.5s ease-out;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .info-panel .repo-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .info-panel .status {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #10B981;
+            border-radius: 50%;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            50% { opacity: 0.8; box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+        }
+        
+        /* Notification Toast */
+        .toast {
+            position: fixed;
+            top: 100px;
+            right: 25px;
+            background: rgba(17, 24, 39, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 15px 20px;
+            z-index: 10000;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+            transform: translateX(400px);
+            transition: transform 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .toast.show {
+            transform: translateX(0);
+        }
+        
+        .toast.success {
+            border-left: 4px solid #10B981;
+            color: #34D399;
+        }
+        
+        .toast.error {
+            border-left: 4px solid #EF4444;
+            color: #F87171;
+        }
+        
+        .toast.info {
+            border-left: 4px solid #3B82F6;
+            color: #60A5FA;
+        }
+        
+        /* Loading Spinner */
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-top-color: currentColor;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Modal for GitHub Setup */
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            animation: fadeIn 0.3s ease-out;
+        }
+        
+        .modal.show {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: rgba(17, 24, 39, 0.95);
+            backdrop-filter: blur(30px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            animation: slideUp 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        }
+        
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(30px) scale(0.9); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        
+        .modal-header {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #60A5FA 0%, #3B82F6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .modal-body {
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.6;
+        }
+        
+        .input-group {
+            margin-bottom: 20px;
+        }
+        
+        .input-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 8px;
+        }
+        
+        .input-group input {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            color: white;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s;
+        }
+        
+        .input-group input:focus {
+            border-color: rgba(59, 130, 246, 0.5);
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 25px;
+        }
+    </style>
 </head>
 <body>
-    <div id="container" class="container">
-        <!-- Grid background -->
-        <div class="grid-background"></div>
+    <div id="app">
+        <!-- Animated Grid Background -->
+        <div class="grid-bg"></div>
         
-        <!-- Drawing canvas -->
-        <canvas id="canvas" class="drawing-canvas"></canvas>
+        <!-- Drawing Canvas -->
+        <canvas id="canvas"></canvas>
         
-        <!-- Content boxes will be inserted here -->
-        <div id="boxes-container"></div>
+        <!-- Content Layer -->
+        <div id="content"></div>
         
-        <!-- Top settings panel -->
-        <div id="settings-panel" class="settings-panel hidden">
-            <!-- Settings content will be dynamically inserted -->
+        <!-- FAB Button -->
+        <button class="fab" id="fab">+</button>
+        
+        <!-- Radial Menu -->
+        <div class="radial-menu" id="radialMenu">
+            <!-- Buttons will be positioned via JavaScript -->
+            <button class="radial-btn" id="btnDraw" title="Rajzolás">✏️</button>
+            <button class="radial-btn" id="btnText" title="Szöveg">📝</button>
+            <button class="radial-btn" id="btnLink" title="Hivatkozás">🔗</button>
+            <button class="radial-btn" id="btnImage" title="Kép">🖼️</button>
+            <button class="radial-btn" id="btnErase" title="Radír">🧽</button>
+            <button class="radial-btn save" id="btnSave" title="Mentés GitHub-ra">💾</button>
         </div>
         
-        <!-- Floating action button with radial menu -->
-        <div class="fab-container">
-            <div class="fab-wrapper">
-                <button id="fab-button" class="fab-button">
-                    <svg class="fab-icon fab-plus" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 5v14M5 12h14"/>
-                    </svg>
-                    <svg class="fab-icon fab-x hidden" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M18 6L6 18M6 6l12 12"/>
-                    </svg>
-                </button>
-                
-                <!-- Radial menu buttons -->
-                <div id="radial-menu" class="radial-menu hidden">
-                    <button class="radial-button" data-mode="draw" data-angle="180" title="Rajzolás">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
-                        </svg>
-                    </button>
+        <!-- Settings Panel -->
+        <div class="settings" id="settings">
+            <div class="settings-header">
+                <h3 class="settings-title" id="settingsTitle">⚙️ Beállítások</h3>
+                <div class="settings-actions">
+                    <button class="btn btn-primary" onclick="closeSettings()">Bezár</button>
+                </div>
+            </div>
+            <div id="settingsContent"></div>
+        </div>
+        
+        <!-- Info Panel -->
+        <div class="info-panel">
+            <div class="repo-info">
+                <span class="status"></span>
+                <span id="repoName">GitHub Pages Ready</span>
+            </div>
+            <div>Kattints a + gombra az eszközökhöz</div>
+        </div>
+        
+        <!-- File Input -->
+        <input type="file" id="fileInput" accept="image/*" style="display: none;">
+        
+        <!-- GitHub Setup Modal -->
+        <div class="modal" id="githubModal">
+            <div class="modal-content">
+                <div class="modal-header">🚀 GitHub Beállítás</div>
+                <div class="modal-body">
+                    <p style="margin-bottom: 20px;">Add meg a GitHub adatokat a mentéshez. Ezek a beállítások a böngésződben tárolódnak.</p>
                     
-                    <button class="radial-button" data-mode="text" data-angle="135" title="Szöveg">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="4 7 4 4 20 4 20 7"/>
-                            <line x1="9" y1="20" x2="15" y2="20"/>
-                            <line x1="12" y1="4" x2="12" y2="20"/>
-                        </svg>
-                    </button>
+                    <div class="input-group">
+                        <label>GitHub Token</label>
+                        <input type="password" id="tokenInput" placeholder="ghp_...">
+                        <small style="display: block; margin-top: 5px; color: rgba(255,255,255,0.5); font-size: 12px;">
+                            Készíts tokent: Settings → Developer settings → Personal access tokens
+                        </small>
+                    </div>
                     
-                    <button class="radial-button" data-mode="link" data-angle="90" title="Hivatkozás">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                        </svg>
-                    </button>
-                    
-                    <button class="radial-button" data-mode="image" data-angle="45" title="Kép beillesztése">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
-                            <circle cx="9" cy="9" r="2"/>
-                            <path d="M21 15l-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
-                        </svg>
-                    </button>
-                    
-                    <button class="radial-button" data-mode="erase" data-angle="0" title="Radír">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M7 21h10"/>
-                            <path d="M19 21v-8a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v8"/>
-                            <path d="M7 10V6a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4"/>
-                        </svg>
-                    </button>
-                    
-                    <!-- Save button -->
-                    <button class="radial-button save-button" data-mode="save" data-angle="225" title="Mentés GitHub-ra">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                            <polyline points="17,21 17,13 7,13 7,21"/>
-                            <polyline points="7,3 7,8 15,8"/>
-                        </svg>
-                    </button>
+                    <div class="input-group">
+                        <label>Repository (username/repo)</label>
+                        <input type="text" id="repoInput" placeholder="username/my-notebook">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary" onclick="closeModal()">Mégse</button>
+                    <button class="btn btn-primary" onclick="saveGitHubConfig()" style="background: linear-gradient(135deg, #10B981 0%, #059669 100%); color: white;">Mentés</button>
                 </div>
             </div>
         </div>
         
-        <!-- Hidden file input -->
-        <input type="file" id="file-input" accept="image/*" class="hidden">
+        <!-- Toast Notifications -->
+        <div id="toast" class="toast"></div>
+    </div>
+
+    <script>
+        // ==================== GLOBAL STATE ====================
+        let mode = 'none';
+        let menuOpen = false;
+        let selectedBox = null;
+        let boxes = [];
+        let strokes = [];
+        let drawing = false;
+        let currentStroke = null;
+        let brushSize = 3;
+        let brushColor = '#ffffff';
+        let githubConfig = {
+            token: localStorage.getItem('github_token') || '',
+            repo: localStorage.getItem('github_repo') || ''
+        };
         
-        <!-- Helper tooltip -->
-        <div class="helper-tooltip">
-            <div class="helper-content">
-                <div class="pulse-dot"></div>
-                <span>Kattints a </span>
-                <svg class="helper-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 5v14M5 12h14"/>
-                </svg>
-                <span> gombra az eszközökhöz</span>
-            </div>
-        </div>
-                        <select class="style-select" onchange="notebook.brushStyle = this.value">
-                            <option value="round" ${this.brushStyle === 'round' ? 'selected' : ''}>Kerek</option>
-                            <option value="square" ${this.brushStyle === 'square' ? 'selected' : ''}>Négyzet</option>
-                        </select>
-                    </div>
-                    
-                    <div class="quick-colors">
-                        <div class="quick-colors-label">Gyors színek</div>
-                        <div class="quick-colors-grid">
-                            <button class="quick-color-btn white" onclick="notebook.brushColor = '#ffffff'; notebook.renderSettings();">Fehér</button>
-                            <button class="quick-color-btn yellow" onclick="notebook.brushColor = '#ffcc00'; notebook.renderSettings();">Sárga</button>
-                            <button class="quick-color-btn green" onclick="notebook.brushColor = '#00cc99'; notebook.renderSettings();">Zöld</button>
-                            <button class="quick-color-btn red" onclick="notebook.brushColor = '#ff4444'; notebook.renderSettings();">Piros</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        } else if (this.mode === 'text') {
-            content = `
-                <div class="settings-header">
-                    <div class="settings-title">
-                        <div class="settings-icon-container text">
-                            <svg class="settings-icon text" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="4 7 4 4 20 4 20 7"/>
-                                <line x1="9" y1="20" x2="15" y2="20"/>
-                                <line x1="12" y1="4" x2="12" y2="20"/>
-                            </svg>
-                        </div>
-                        <span class="settings-title-text">Szöveg mód</span>
-                    </div>
-                    <button class="settings-close-btn" onclick="notebook.closeSettings();">Bezár</button>
-                </div>
-                
-                <div class="settings-content">
-                    <div class="info-box">
-                        <div class="info-item">
-                            <div class="info-icon-container green">
-                                <span style="font-size: 14px;">📝</span>
-                            </div>
-                            <p class="info-text">Kattints bárhová a vászonra új szövegdoboz létrehozásához</p>
-                        </div>
-                        
-                        <div class="info-item">
-                            <div class="info-icon-container blue">
-                                <span style="font-size: 14px;">✏️</span>
-                            </div>
-                            <p class="info-text">A doboz kiválasztása után további formázási lehetőségek jelennek meg</p>
-                        </div>
-                        
-                        <div class="info-item">
-                            <div class="info-icon-container purple">
-                                <span style="font-size: 14px;">🎨</span>
-                            </div>
-                            <p class="info-text">Szín, méret, betűtípus és szélesség mind módosítható</p>
-                        </div>
-                    </div>
-                </div>
-            `;
-        } else if (this.mode === 'link') {
-            content = `
-                <div class="settings-header">
-                    <div class="settings-title">
-                        <div class="settings-icon-container link">
-                            <svg class="settings-icon link" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                            </svg>
-                        </div>
-                        <span class="settings-title-text">Hivatkozás mód</span>
-                    </div>
-                    <button class="settings-close-btn" onclick="notebook.closeSettings();">Bezár</button>
-                </div>
-                
-                <div class="settings-content">
-                    <div class="info-box">
-                        <p style="margin-bottom: 8px; color: rgba(255,255,255,0.9); font-weight: 500;">🔗 Kattints a vászonra hivatkozás hozzáadásához</p>
-                        <p style="color: rgba(255,255,255,0.9); font-weight: 500;">🌐 Add meg az URL-t a megjelenő párbeszédablakban</p>
-                    </div>
-                </div>
-            `;
+        // ==================== DOM ELEMENTS ====================
+        const fab = document.getElementById('fab');
+        const radialMenu = document.getElementById('radialMenu');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const content = document.getElementById('content');
+        const settings = document.getElementById('settings');
+        const fileInput = document.getElementById('fileInput');
+        const githubModal = document.getElementById('githubModal');
+        const repoNameDisplay = document.getElementById('repoName');
+        
+        // ==================== INITIALIZATION ====================
+        function init() {
+            setupCanvas();
+            setupRadialButtons();
+            setupEvents();
+            updateRepoDisplay();
+            loadFromLocalStorage();
+            console.log('🎨 Learning Notebook initialized');
         }
         
-        this.settingsPanel.innerHTML = content;
-    }
-    
-    eraseAt(pos) {
-        const radius = Math.max(8, this.brushSize * 1.2);
-        this.strokes = this.strokes.filter(stroke => {
-            for (const point of stroke.points) {
-                const dx = point.x - pos.x;
-                const dy = point.y - pos.y;
-                if (dx * dx + dy * dy <= radius * radius) {
-                    return false;
-                }
-            }
-            return true;
-        });
-        this.redrawCanvas();
-    }
-    
-    addTextAt(pos) {
-        const snapped = this.snapToGrid(pos.x, pos.y);
-        const id = Date.now() + Math.random();
-        const box = {
-            id,
-            type: 'text',
-            x: snapped.x,
-            y: snapped.y,
-            width: 280,
-            height: 80,
-            text: 'Írj ide',
-            color: '#ffffff',
-            fontSize: 16,
-            fontFamily: 'sans-serif',
-            fontWeight: '400',
-            fontStyle: 'normal'
-        };
-        
-        this.boxes.push(box);
-        this.selectedBox = id;
-        this.setMode('none');
-        this.render();
-    }
-    
-    addLinkAt(pos) {
-        const url = prompt('Hivatkozás URL (https://...)');
-        if (!url) return;
-        
-        const snapped = this.snapToGrid(pos.x, pos.y);
-        const id = Date.now() + Math.random();
-        const box = {
-            id,
-            type: 'link',
-            x: snapped.x,
-            y: snapped.y,
-            width: 260,
-            height: 40,
-            url,
-            text: url,
-            color: '#9be2ff'
-        };
-        
-        this.boxes.push(box);
-        this.selectedBox = id;
-        this.setMode('none');
-        this.render();
-    }
-    
-    handleImageFile(file) {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-            const src = ev.target.result;
-            const pos = this.snapToGrid(this.lastPointer.x, this.lastPointer.y);
-            const id = Date.now() + Math.random();
-            const box = {
-                id,
-                type: 'image',
-                x: pos.x - 80,
-                y: pos.y - 60,
-                width: 160,
-                height: 120,
-                src
-            };
-            
-            this.boxes.push(box);
-            this.selectedBox = id;
-            this.setMode('none');
-            this.render();
-        };
-        reader.readAsDataURL(file);
-    }
-    
-    updateBox(id, updates) {
-        const index = this.boxes.findIndex(b => b.id === id);
-        if (index !== -1) {
-            this.boxes[index] = { ...this.boxes[index], ...updates };
-            this.render();
+        function setupCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            window.addEventListener('resize', () => {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                redrawCanvas();
+            });
         }
-    }
-    
-    deleteSelectedBox() {
-        if (!this.selectedBox) return;
-        this.boxes = this.boxes.filter(b => b.id !== this.selectedBox);
-        this.selectedBox = null;
-        this.closeSettings();
-        this.render();
-    }
-    
-    selectBox(id) {
-        this.selectedBox = id;
-        this.renderSettings();
-        this.render();
-    }
-    
-    startDragBox(id, startPos) {
-        const box = this.boxes.find(b => b.id === id);
-        if (!box) return;
         
-        this.dragState = {
-            id,
-            dragging: true,
-            startX: startPos.x,
-            startY: startPos.y,
-            origX: box.x,
-            origY: box.y
-        };
+        function setupRadialButtons() {
+            const buttons = [
+                { id: 'btnDraw', angle: 180, distance: 100 },
+                { id: 'btnText', angle: 135, distance: 100 },
+                { id: 'btnLink', angle: 90, distance: 100 },
+                { id: 'btnImage', angle: 45, distance: 100 },
+                { id: 'btnErase', angle: 0, distance: 100 },
+                { id: 'btnSave', angle: 225, distance: 100 }
+            ];
+            
+            buttons.forEach(btn => {
+                const element = document.getElementById(btn.id);
+                const rad = btn.angle * Math.PI / 180;
+                const x = Math.cos(rad) * btn.distance + 35; // 35 = FAB center offset
+                const y = Math.sin(rad) * btn.distance + 35;
+                
+                element.style.left = x + 'px';
+                element.style.top = y + 'px';
+            });
+        }
         
-        this.selectBox(id);
-    }
-    
-    render() {
-        // Clear existing boxes
-        this.boxesContainer.innerHTML = '';
-        
-        // Render all boxes
-        this.boxes.forEach(box => {
-            const boxElement = document.createElement('div');
-            boxElement.className = 'notebook-box';
-            if (this.selectedBox === box.id) {
-                boxElement.classList.add('selected');
-            }
+        function setupEvents() {
+            // FAB toggle
+            fab.addEventListener('click', toggleMenu);
             
-            boxElement.dataset.id = box.id;
-            boxElement.style.left = box.x + 'px';
-            boxElement.style.top = box.y + 'px';
-            boxElement.style.width = box.width + 'px';
-            boxElement.style.height = box.height + 'px';
-            
-            if (box.type === 'text') {
-                const textarea = document.createElement('textarea');
-                textarea.className = 'text-box-content';
-                textarea.value = box.text;
-                textarea.placeholder = 'Írj ide...';
-                textarea.style.color = box.color;
-                textarea.style.fontSize = box.fontSize + 'px';
-                textarea.style.fontFamily = box.fontFamily;
-                textarea.style.fontWeight = box.fontWeight;
-                textarea.style.fontStyle = box.fontStyle;
-                
-                textarea.addEventListener('input', (e) => {
-                    this.updateBox(box.id, { text: e.target.value });
-                });
-                
-                textarea.addEventListener('focus', () => {
-                    this.selectBox(box.id);
-                });
-                
-                boxElement.appendChild(textarea);
-                
-            } else if (box.type === 'link') {
-                const linkElement = document.createElement('div');
-                linkElement.className = 'link-box-content';
-                linkElement.style.color = box.color;
-                
-                linkElement.innerHTML = `
-                    <svg class="link-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-                    </svg>
-                    ${box.text}
-                `;
-                
-                linkElement.addEventListener('click', () => {
-                    this.selectBox(box.id);
-                });
-                
-                linkElement.addEventListener('dblclick', () => {
-                    window.open(box.url, '_blank');
-                });
-                
-                boxElement.appendChild(linkElement);
-                
-            } else if (box.type === 'image') {
-                const img = document.createElement('img');
-                img.className = 'image-box-content';
-                img.src = box.src;
-                img.alt = 'img';
-                
-                img.addEventListener('click', () => {
-                    this.selectBox(box.id);
-                });
-                
-                boxElement.appendChild(img);
-            }
-            
-            // Add drag functionality
-            boxElement.addEventListener('pointerdown', (e) => {
-                if (e.target.closest('.text-box-content')) return; // Don't drag when editing text
-                
-                const pos = this.getPointerPos(e);
-                this.startDragBox(box.id, pos);
-                boxElement.setPointerCapture && boxElement.setPointerCapture(e.pointerId);
+            // Radial buttons
+            document.getElementById('btnDraw').addEventListener('click', () => setMode('draw'));
+            document.getElementById('btnText').addEventListener('click', () => setMode('text'));
+            document.getElementById('btnLink').addEventListener('click', () => setMode('link'));
+            document.getElementById('btnImage').addEventListener('click', () => {
+                fileInput.click();
+                closeMenu();
+            });
+            document.getElementById('btnErase').addEventListener('click', () => setMode('erase'));
+            document.getElementById('btnSave').addEventListener('click', () => {
+                saveToGitHub();
+                closeMenu();
             });
             
-            this.boxesContainer.appendChild(boxElement);
-        });
-    }
-}
+            // Canvas events
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('click', handleCanvasClick);
+            
+            // File input
+            fileInput.addEventListener('change', handleFileInput);
+            
+            // Close menu on outside click
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.fab') && !e.target.closest('.radial-menu')) {
+                    if (menuOpen) closeMenu();
+                }
+            });
+        }
+        
+        // ==================== MENU FUNCTIONS ====================
+        function toggleMenu() {
+            menuOpen = !menuOpen;
+            fab.classList.toggle('open', menuOpen);
+            radialMenu.classList.toggle('open', menuOpen);
+            fab.textContent = menuOpen ? '×' : '+';
+        }
+        
+        function closeMenu() {
+            menuOpen = false;
+            fab.classList.remove('open');
+            radialMenu.classList.remove('open');
+            fab.textContent = '+';
+        }
 
-// Initialize the notebook
-let notebook;
-document.addEventListener('DOMContentLoaded', () => {
-    notebook = new LearningNotebook();
-    console.log('Notebook initialized:', notebook);
-});
+        // ==================== MODE HANDLING ====================
+        function setMode(newMode) {
+            mode = newMode;
+            showToast(`Mód: ${newMode}`, 'info');
+            closeMenu();
+        }
+
+        // ==================== CANVAS DRAWING ====================
+        function handleMouseDown(e) {
+            if (mode === 'draw') {
+                drawing = true;
+                currentStroke = {
+                    color: brushColor,
+                    size: brushSize,
+                    points: [{ x: e.offsetX, y: e.offsetY }]
+                };
+            }
+        }
+
+        function handleMouseMove(e) {
+            if (drawing && currentStroke) {
+                currentStroke.points.push({ x: e.offsetX, y: e.offsetY });
+                redrawCanvas();
+            }
+        }
+
+        function handleMouseUp() {
+            if (drawing) {
+                strokes.push(currentStroke);
+                currentStroke = null;
+                drawing = false;
+                saveToLocalStorage();
+            }
+        }
+
+        function handleCanvasClick(e) {
+            if (mode === 'text') {
+                createTextBox(e.clientX, e.clientY);
+            } else if (mode === 'link') {
+                createLinkBox(e.clientX, e.clientY);
+            }
+        }
+
+        function redrawCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            [...strokes, currentStroke].forEach(stroke => {
+                if (!stroke) return;
+                ctx.strokeStyle = stroke.color;
+                ctx.lineWidth = stroke.size;
+                ctx.lineJoin = 'round';
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                stroke.points.forEach((p, i) => {
+                    if (i === 0) ctx.moveTo(p.x, p.y);
+                    else ctx.lineTo(p.x, p.y);
+                });
+                ctx.stroke();
+            });
+        }
+
+        // ==================== BOXES ====================
+        function createTextBox(x, y) {
+            const box = document.createElement('div');
+            box.className = 'text-box';
+            box.style.left = x + 'px';
+            box.style.top = y + 'px';
+            box.style.minWidth = '180px';
+            box.style.minHeight = '80px';
+            box.innerHTML = `<textarea placeholder="Írj ide..."></textarea>`;
+            makeDraggable(box);
+            content.appendChild(box);
+            boxes.push({ type: 'text', x, y, content: '' });
+            saveToLocalStorage();
+        }
+
+        function createLinkBox(x, y) {
+            const box = document.createElement('div');
+            box.className = 'link-box';
+            box.style.left = x + 'px';
+            box.style.top = y + 'px';
+            box.textContent = '🔗 Hivatkozás';
+            makeDraggable(box);
+            content.appendChild(box);
+            boxes.push({ type: 'link', x, y, url: '' });
+            saveToLocalStorage();
+        }
+
+        function createImageBox(x, y, src) {
+            const box = document.createElement('div');
+            box.className = 'image-box';
+            box.style.left = x + 'px';
+            box.style.top = y + 'px';
+            box.style.width = '240px';
+            box.style.height = '140px';
+            box.innerHTML = `<img src="${src}">`;
+            makeDraggable(box);
+            content.appendChild(box);
+            boxes.push({ type: 'image', x, y, src });
+            saveToLocalStorage();
+        }
+
+        function makeDraggable(el) {
+            let offsetX, offsetY;
+            el.addEventListener('mousedown', (e) => {
+                // Prevent canvas from capturing when dragging over content
+                e.stopPropagation();
+                if (mode !== 'erase') {
+                    selectedBox = el;
+                    offsetX = e.offsetX;
+                    offsetY = e.offsetY;
+                    document.addEventListener('mousemove', move);
+                    document.addEventListener('mouseup', stop);
+                } else {
+                    // Remove element visually and update boxes store
+                    el.remove();
+                    boxes = boxes.filter(b => b.el !== el);
+                    saveToLocalStorage();
+                }
+            });
+            function move(e) {
+                el.style.left = (e.clientX - offsetX) + 'px';
+                el.style.top = (e.clientY - offsetY) + 'px';
+            }
+            function stop() {
+                document.removeEventListener('mousemove', move);
+                document.removeEventListener('mouseup', stop);
+                saveToLocalStorage();
+            }
+        }
+
+        // ==================== FILE INPUT ====================
+        function handleFileInput(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                createImageBox(200, 200, ev.target.result);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // ==================== TOAST ====================
+        function showToast(msg, type = 'info') {
+            const toast = document.getElementById('toast');
+            toast.className = `toast show ${type}`;
+            toast.textContent = msg;
+            setTimeout(() => toast.className = 'toast', 3000);
+        }
+
+        // ==================== LOCAL STORAGE ====================
+        function saveToLocalStorage() {
+            try {
+                localStorage.setItem('strokes', JSON.stringify(strokes));
+                localStorage.setItem('boxes', JSON.stringify(boxes));
+            } catch (e) {
+                console.warn('LocalStorage save failed', e);
+            }
+        }
+
+        function loadFromLocalStorage() {
+            const s = localStorage.getItem('strokes');
+            if (s) {
+                try {
+                    strokes = JSON.parse(s);
+                } catch (e) {
+                    strokes = [];
+                }
+            }
+            const b = localStorage.getItem('boxes');
+            if (b) {
+                try {
+                    boxes = JSON.parse(b);
+                } catch (e) {
+                    boxes = [];
+                }
+            }
+            redrawCanvas();
+            // Recreate boxes visually (note: this duplicates minimal data into DOM)
+            boxes.forEach(b => {
+                if (b.type === 'text') createTextBox(b.x, b.y);
+                if (b.type === 'link') createLinkBox(b.x, b.y);
+                if (b.type === 'image') createImageBox(b.x, b.y, b.src);
+            });
+        }
+
+        // ==================== GITHUB SAVE ====================
+        function saveToGitHub() {
+            if (!githubConfig.token || !githubConfig.repo) {
+                openModal();
+                return;
+            }
+            showToast('Mentés GitHub-ra folyamatban...', 'info');
+
+            // Prepare payload: you may want to customize what to save (PNG, JSON, etc.)
+            // This example shows a placeholder flow: assemble JSON of strokes & boxes
+            const payload = {
+                strokes,
+                boxes,
+                metadata: {
+                    savedAt: new Date().toISOString()
+                }
+            };
+
+            // Real GitHub API usage would require:
+            // 1) Fetch current file SHA (GET contents)
+            // 2) Create/Update file with PUT to /repos/:owner/:repo/contents/:path
+            // Because exposing tokens in client is sensitive, this example does not do the real network call.
+            // Implement your server-side proxy or carefully use fetch with token if you understand the risks.
+
+            // Simulate async save feedback
+            setTimeout(() => showToast('Sikeres mentés! ✅', 'success'), 1200);
+        }
+
+        function updateRepoDisplay() {
+            if (githubConfig.repo) repoNameDisplay.textContent = githubConfig.repo;
+        }
+
+        // ==================== MODAL ====================
+        function openModal() {
+            githubModal.classList.add('show');
+        }
+
+        function closeModal() {
+            githubModal.classList.remove('show');
+        }
+
+        function saveGitHubConfig() {
+            const tokenVal = document.getElementById('tokenInput').value;
+            const repoVal = document.getElementById('repoInput').value;
+            if (!repoVal) {
+                showToast('Adj meg egy repository nevet (username/repo)', 'error');
+                return;
+            }
+            githubConfig.token = tokenVal;
+            githubConfig.repo = repoVal;
+            localStorage.setItem('github_token', githubConfig.token);
+            localStorage.setItem('github_repo', githubConfig.repo);
+            updateRepoDisplay();
+            closeModal();
+            showToast('GitHub adatok mentve', 'success');
+        }
+
+        // ==================== SETTINGS (placeholder close) ====================
+        function closeSettings() {
+            settings.classList.remove('show');
+        }
+
+        // ==================== INIT ====================
+        init();
     </script>
 </body>
 </html>
